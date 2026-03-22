@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Planner Urlopu</title>
+    <style>
+        body {
+            font-family: Arial;
+            padding: 20px;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 8px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 22px;
+        }
+
+        .year-nav {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .year-nav button {
+            font-size: 18px;
+            cursor: pointer;
+            border: 1px solid #aaa;
+            background: #f5f5f5;
+            padding: 2px 10px;
+            border-radius: 4px;
+        }
+
+        .year-nav button:hover {
+            background: #e0e0e0;
+        }
+
+        #year-label {
+            font-size: 18px;
+            font-weight: bold;
+            min-width: 50px;
+            text-align: center;
+        }
+
+        .stats {
+            margin-bottom: 16px;
+            font-size: 15px;
+        }
+
+        .stats span {
+            margin-right: 24px;
+        }
+
+        .month {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 20px;
+        }
+
+        .month-name {
+            width: 100px;
+            font-weight: bold;
+            flex-shrink: 0;
+            padding-top: 36px;
+        }
+
+        .month-grid {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .weekdays-row, .days-row {
+            display: flex;
+            flex-wrap: nowrap;
+        }
+
+        .weekday-cell {
+            width: 36px;
+            height: 25px;
+            font-size: 11px;
+            font-weight: bold;
+            color: #000068;
+            text-align: center;
+            line-height: 25px;
+            flex-shrink: 0;
+        }
+
+        .cell {
+            width: 36px;
+            height: 36px;
+            border: 1px solid #ddd;
+            font-size: 12px;
+            text-align: center;
+            line-height: 36px;
+            user-select: none;
+            flex-shrink: 0;
+            box-sizing: border-box;
+        }
+
+        .weekend {
+            background: #eee;
+        }
+
+        .holiday {
+            background: #ffcccc;
+        }
+
+        .selected {
+            background: #4caf50;
+            color: white;
+        }
+
+        .workday {
+            cursor: pointer;
+        }
+
+        .workday:hover {
+            opacity: 0.75;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>Planner Urlopu</h1>
+    <div class="year-nav">
+        <button id="prev-year">&#8592;</button>
+        <span id="year-label"></span>
+        <button id="next-year">&#8594;</button>
+    </div>
+</div>
+
+<div class="stats">
+    <span>Wybrane dni urlopu: <strong id="count">0</strong></span>
+    <span>Lacznie dni wolnych: <strong id="total">0</strong></span>
+</div>
+
+<div id="calendar"></div>
+
+<script>
+    let year = new Date().getFullYear();
+    let holidays = {};
+    let selectedDays = new Set();
+
+    const calendar = document.getElementById("calendar");
+    const countEl = document.getElementById("count");
+    const totalEl = document.getElementById("total");
+    const yearLabel = document.getElementById("year-label");
+
+    const weekdaysShort = ["Pn", "Wt", "Sr", "Cz", "Pt", "Sb", "Nd"];
+    const months = [
+        "Styczen", "Luty", "Marzec", "Kwiecien", "Maj", "Czerwiec",
+        "Lipiec", "Sierpien", "Wrzesien", "Pazdziernik", "Listopad", "Grudzien"
+    ];
+
+    document.getElementById("prev-year").onclick = () => changeYear(year - 1);
+    document.getElementById("next-year").onclick = () => changeYear(year + 1);
+
+    function changeYear(newYear) {
+        year = newYear;
+        selectedDays = new Set();
+        holidays = {};
+        yearLabel.textContent = year;
+        calendar.innerHTML = "";
+        updateStats();
+        loadHolidays();
+    }
+
+    function getPolishWeekdayIndex(jsDay) {
+        return jsDay === 0 ? 6 : jsDay - 1;
+    }
+
+    function isoDate(y, m, d) {
+        return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+
+    function isNonWorking(iso) {
+        const d = new Date(iso);
+        const dow = d.getDay();
+        return dow === 0 || dow === 6 || !!holidays[iso];
+    }
+
+    function addDays(iso, n) {
+        const d = new Date(iso);
+        d.setDate(d.getDate() + n);
+        return isoDate(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+
+    function calcTotalFreeDays() {
+        if (selectedDays.size === 0) return 0;
+
+        // zbior wszystkich dni wolnych (urlop + weekendy/swieta laczacych sie lacuchowo)
+        const free = new Set(selectedDays);
+
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const iso of free) {
+                const prev = addDays(iso, -1);
+                const next = addDays(iso, 1);
+                if (isNonWorking(prev) && !free.has(prev)) {
+                    free.add(prev);
+                    changed = true;
+                }
+                if (isNonWorking(next) && !free.has(next)) {
+                    free.add(next);
+                    changed = true;
+                }
+            }
+        }
+
+        return free.size;
+    }
+
+    function updateStats() {
+        countEl.textContent = selectedDays.size;
+        totalEl.textContent = calcTotalFreeDays();
+    }
+
+    function loadHolidays() {
+        fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/PL`)
+            .then(res => res.json())
+            .then(data => {
+                holidays = {};
+                data.forEach(h => holidays[h.date] = h.localName);
+                render();
+            })
+            .catch(() => render());
+    }
+
+    function render() {
+        calendar.innerHTML = "";
+
+        months.forEach((monthName, monthIndex) => {
+            const container = document.createElement("div");
+            container.className = "month";
+
+            const name = document.createElement("div");
+            name.className = "month-name";
+            name.textContent = monthName;
+
+            const grid = document.createElement("div");
+            grid.className = "month-grid";
+
+            const weekdaysRow = document.createElement("div");
+            weekdaysRow.className = "weekdays-row";
+
+            const daysRow = document.createElement("div");
+            daysRow.className = "days-row";
+
+            const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const date = new Date(year, monthIndex, day);
+                const iso = isoDate(year, monthIndex, day);
+                const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+                const isHoliday = holidays[iso];
+                const wdIndex = getPolishWeekdayIndex(date.getDay());
+
+                const wdCell = document.createElement("div");
+                wdCell.className = "weekday-cell";
+                wdCell.textContent = weekdaysShort[wdIndex];
+                weekdaysRow.appendChild(wdCell);
+
+                const cell = document.createElement("div");
+                cell.className = "cell";
+                cell.textContent = day;
+
+                if (isWeekend) cell.classList.add("weekend");
+                if (isHoliday) {
+                    cell.classList.add("holiday");
+                    cell.title = isHoliday;
+                }
+                if (selectedDays.has(iso)) cell.classList.add("selected");
+                if (!isWeekend && !isHoliday) cell.classList.add("workday");
+
+                cell.onclick = () => {
+                    if (isWeekend || isHoliday) return;
+                    if (selectedDays.has(iso)) {
+                        selectedDays.delete(iso);
+                    } else {
+                        selectedDays.add(iso);
+                    }
+                    updateStats();
+                    render();
+                };
+
+                daysRow.appendChild(cell);
+            }
+
+            grid.appendChild(weekdaysRow);
+            grid.appendChild(daysRow);
+            container.appendChild(name);
+            container.appendChild(grid);
+            calendar.appendChild(container);
+        });
+
+        updateStats();
+    }
+
+    yearLabel.textContent = year;
+    loadHolidays();
+</script>
+
+</body>
+</html>
