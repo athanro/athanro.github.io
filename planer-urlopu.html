@@ -13,7 +13,7 @@
             display: flex;
             align-items: center;
             gap: 16px;
-            margin-bottom: 8px;
+            margin-bottom: 24px;
         }
 
         .header h1 {
@@ -48,25 +48,48 @@
         }
 
         .stats {
-            margin-bottom: 16px;
-            font-size: 15px;
+            margin-bottom: 10px;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            flex-wrap: wrap;
         }
 
         .stats span {
-            margin-right: 24px;
+            white-space: nowrap;
+        }
+
+        #copy-btn {
+            padding: 4px 14px;
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid #aaa;
+            background: #f5f5f5;
+            border-radius: 4px;
+        }
+
+        #copy-btn:hover {
+            background: #e0e0e0;
+        }
+
+        #copy-msg {
+            font-size: 13px;
+            color: green;
+            display: none;
         }
 
         .month {
             display: flex;
             align-items: flex-start;
-            margin-bottom: 20px;
+            margin-bottom: 10px;
         }
 
         .month-name {
             width: 100px;
             font-weight: bold;
             flex-shrink: 0;
-            padding-top: 36px;
+            padding-top: 22px;
         }
 
         .month-grid {
@@ -138,6 +161,8 @@
 <div class="stats">
     <span>Wybrane dni urlopu: <strong id="count">0</strong></span>
     <span>Lacznie dni wolnych: <strong id="total">0</strong></span>
+    <button id="copy-btn">Kopiuj link</button>
+    <span id="copy-msg">Skopiowano!</span>
 </div>
 
 <div id="calendar"></div>
@@ -158,6 +183,106 @@
         "Lipiec", "Sierpien", "Wrzesien", "Pazdziernik", "Listopad", "Grudzien"
     ];
 
+    // --- URL encode/decode ---
+    // Format: 2026-1-2,5-8,15|2026-3-10-14
+    // Groups by year and month: YEAR-MONTH-d,d-d,d
+    // Range: d-d (two numbers joined by a hyphen)
+    // Single day: d
+    // Groups separated by |
+
+    function encodeDays(days) {
+        if (days.size === 0) return "";
+
+        // group by year and month
+        const map = {};
+        for (const iso of days) {
+            const [y, m, d] = iso.split("-").map(Number);
+            const key = `${y}-${m}`;
+            if (!map[key]) map[key] = [];
+            map[key].push(d);
+        }
+
+        const parts = [];
+        for (const key of Object.keys(map).sort()) {
+            const [y, m] = key.split("-").map(Number);
+            const ds = map[key].sort((a, b) => a - b);
+
+            // build ranges
+            const segments = [];
+            let start = ds[0], end = ds[0];
+            for (let i = 1; i < ds.length; i++) {
+                if (ds[i] === end + 1) {
+                    end = ds[i];
+                } else {
+                    segments.push(start === end ? `${start}` : `${start}-${end}`);
+                    start = end = ds[i];
+                }
+            }
+            segments.push(start === end ? `${start}` : `${start}-${end}`);
+
+            parts.push(`${y}-${m}-${segments.join(",")}`);
+        }
+
+        return parts.join("|");
+    }
+
+    function decodeDays(str) {
+        const result = new Set();
+        if (!str) return result;
+
+        for (const group of str.split("|")) {
+            // format: YEAR-MONTH-segments
+            const match = group.match(/^(\d{4})-(\d{1,2})-(.+)$/);
+            if (!match) continue;
+            const y = Number(match[1]);
+            const m = Number(match[2]);
+            const segments = match[3].split(",");
+
+            for (const seg of segments) {
+                const range = seg.match(/^(\d+)-(\d+)$/);
+                if (range) {
+                    const from = Number(range[1]), to = Number(range[2]);
+                    for (let d = from; d <= to; d++) {
+                        result.add(isoDate(y, m - 1, d));
+                    }
+                } else {
+                    result.add(isoDate(y, m - 1, Number(seg)));
+                }
+            }
+        }
+        return result;
+    }
+
+    function buildShareUrl() {
+        const encoded = encodeDays(selectedDays);
+        const url = new URL(window.location.href.split("?")[0]);
+        if (encoded) url.searchParams.set("days", encoded);
+        return url.toString();
+    }
+
+    document.getElementById("copy-btn").onclick = () => {
+        navigator.clipboard.writeText(buildShareUrl()).then(() => {
+            const msg = document.getElementById("copy-msg");
+            msg.style.display = "inline";
+            setTimeout(() => msg.style.display = "none", 2000);
+        });
+    };
+
+    // --- initialize from URL ---
+    function loadFromUrl() {
+        const params = new URLSearchParams(window.location.search);
+        const daysParam = params.get("days");
+        if (daysParam) {
+            selectedDays = decodeDays(daysParam);
+            // set year to the first selected day
+            if (selectedDays.size > 0) {
+                const firstIso = [...selectedDays].sort()[0];
+                year = Number(firstIso.split("-")[0]);
+            }
+        }
+    }
+
+    // --- year navigation ---
     document.getElementById("prev-year").onclick = () => changeYear(year - 1);
     document.getElementById("next-year").onclick = () => changeYear(year + 1);
 
@@ -171,6 +296,7 @@
         loadHolidays();
     }
 
+    // --- helpers ---
     function getPolishWeekdayIndex(jsDay) {
         return jsDay === 0 ? 6 : jsDay - 1;
     }
@@ -193,14 +319,12 @@
 
     function calcTotalFreeDays() {
         if (selectedDays.size === 0) return 0;
-
-        // zbior wszystkich dni wolnych (urlop + weekendy/swieta laczacych sie lacuchowo)
         const free = new Set(selectedDays);
-
         let changed = true;
+        // expand the set in both directions as long as adjacent days are non-working
         while (changed) {
             changed = false;
-            for (const iso of free) {
+            for (const iso of [...free]) {
                 const prev = addDays(iso, -1);
                 const next = addDays(iso, 1);
                 if (isNonWorking(prev) && !free.has(prev)) {
@@ -213,7 +337,6 @@
                 }
             }
         }
-
         return free.size;
     }
 
@@ -222,6 +345,7 @@
         totalEl.textContent = calcTotalFreeDays();
     }
 
+    // --- load holidays and render ---
     function loadHolidays() {
         fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/PL`)
             .then(res => res.json())
@@ -262,6 +386,7 @@
                 const isHoliday = holidays[iso];
                 const wdIndex = getPolishWeekdayIndex(date.getDay());
 
+                // weekday label above each day cell
                 const wdCell = document.createElement("div");
                 wdCell.className = "weekday-cell";
                 wdCell.textContent = weekdaysShort[wdIndex];
@@ -303,6 +428,8 @@
         updateStats();
     }
 
+    // --- entry point ---
+    loadFromUrl();
     yearLabel.textContent = year;
     loadHolidays();
 </script>
